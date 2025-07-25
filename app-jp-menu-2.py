@@ -18,7 +18,13 @@ nutrition_jp_map = {
     'fiber_g': '食物繊維 (g)', 'sodium_mg': 'ナトリウム (mg)'
 }
 
-IMAGE_BASE_PATH = "UECFOOD256"
+# ★★★ここからパス設定を修正★★★
+# 実行中のスクリプトのディレクトリを取得
+SCRIPT_DIR = Path(__file__).resolve().parent
+# スクリプトの場所を基準に画像フォルダへのパスを作成
+IMAGE_BASE_PATH = SCRIPT_DIR / "UECFOOD256"
+# ★★★ここまで★★★
+
 
 # --- ヘルパー関数 ---
 
@@ -51,8 +57,9 @@ def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendat
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
             
+            # ★変更点: 絶対パスのIMAGE_BASE_PATHを使用
             top_foods['image_path'] = top_foods.index.to_series().apply(
-                lambda food_id: find_random_image(Path(IMAGE_BASE_PATH) / str(food_id))
+                lambda food_id: find_random_image(IMAGE_BASE_PATH / str(food_id))
             )
             
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
@@ -67,7 +74,8 @@ def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendat
 def load_yolo_model(path="best-2.pt"):
     """YOLOモデルをロード（キャッシュで高速化）"""
     try:
-        model = YOLO(path)
+        # ★変更点: SCRIPT_DIRを基準にモデルパスを指定
+        model = YOLO(SCRIPT_DIR / path)
         return model
     except Exception as e:
         st.error(f"モデル '{path}' の読み込みに失敗しました: {e}")
@@ -77,7 +85,8 @@ def load_yolo_model(path="best-2.pt"):
 def load_nutrition_data(path="master_natrition.csv"):
     """栄養素データベースをロード（キャッシュで高速化）"""
     try:
-        df = pd.read_csv(path)
+        # ★変更点: SCRIPT_DIRを基準にCSVパスを指定
+        df = pd.read_csv(SCRIPT_DIR / path, encoding='cp932')
         for col in df.columns[4:]:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[\(\)-]', '0', regex=True), errors='coerce').fillna(0)
         df.set_index('num', inplace=True)
@@ -103,9 +112,8 @@ daily_needs = {
 st.title('🥗 食事分析AI')
 st.write('食事の写真をアップロードすると、含まれる栄養素を分析し、1日の摂取基準に足りない栄養素と、それを補うメニューをお知らせします。')
 
-# ★★★画像フォルダの存在チェックを追加★★★
-if not os.path.isdir(IMAGE_BASE_PATH):
-    st.error(f"画像フォルダ '{IMAGE_BASE_PATH}' が見つかりません。app.pyと同じ階層に配置してください。")
+if not IMAGE_BASE_PATH.is_dir():
+    st.error(f"画像フォルダ '{IMAGE_BASE_PATH.name}' が見つかりません。app.pyと同じ階層に配置してください。")
 else:
     uploaded_file = st.file_uploader("画像をアップロードしてください", type=["jpg", "png", "jpeg"])
 
@@ -167,12 +175,13 @@ else:
                     
                     for nutrient, food_df in recommendations.items():
                         with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
-                            # ★★★ここが画像表示の重要な部分です★★★
                             for index, row in food_df.iterrows():
                                 col1, col2 = st.columns([1, 2])
                                 with col1:
-                                    if row['image_path'] and os.path.exists(row['image_path']):
-                                        st.image(row['image_path'])
+                                    # pathlib.Pathオブジェクトをos.path.existsでチェック
+                                    image_path = row['image_path']
+                                    if image_path and os.path.exists(image_path):
+                                        st.image(image_path)
                                     else:
                                         st.text("画像なし")
                                 with col2:
@@ -184,4 +193,3 @@ else:
                 st.success("素晴らしい！この食事で1日の主要な栄養素目標を達成できそうです。")
         else:
             st.info("写真から料理を検出できませんでした。別の画像を試してください。")
-
