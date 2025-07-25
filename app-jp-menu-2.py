@@ -29,8 +29,8 @@ def get_single_image_path(food_id):
         return None
     image_files = list(folder.glob("*.jpg")) + list(folder.glob("*.jpeg")) + list(folder.glob("*.png"))
     if image_files:
-        # 画像が見つかった場合は絶対パスで返す
-        return str(image_files[0].resolve())
+        # 相対パスで返す
+        return str(image_files[0])
     return None
 
 
@@ -43,12 +43,12 @@ def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendat
         if eng_nutrient_col and eng_nutrient_col in nutrition_df.columns:
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
-            # index（num）がint型の場合、str化して画像パス取得
             top_foods['image_path'] = top_foods.index.to_series().apply(lambda x: get_single_image_path(x))
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
             result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
             recommendations[jp_nutrient] = result_df
     return recommendations
+
 
 # --- データとモデルの読み込み ---
 
@@ -157,8 +157,8 @@ else:
                                 col1, col2 = st.columns([1, 2])
                                 with col1:
                                     # デバッグ: 画像パス表示
-                                    # st.write(row['image_path'])
-                                    if row['image_path'] and os.path.exists(row['image_path']):
+                                    st.write("画像パス:", row['image_path'])
+                                    if row['image_path']:
                                         st.image(row['image_path'])
                                     else:
                                         st.text("画像なし")
