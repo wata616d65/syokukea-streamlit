@@ -98,7 +98,7 @@ def recommend_foods(deficiency_data: dict, nutrition_df: pd.DataFrame, detected_
 # --- データとモデルの読み込み（キャッシュ機能付き） ---
 
 @st.cache_resource
-def load_yolo_model(path: Path):
+def load_yolo_model(path="best-2.pt"):
     """YOLOモデルをロード"""
     if not path.is_file():
         st.error(f"モデルファイルが見つかりません: {path}")
