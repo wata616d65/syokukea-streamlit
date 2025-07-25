@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 
 st.write("Page A")
 st.write("読み込める食品リスト")
