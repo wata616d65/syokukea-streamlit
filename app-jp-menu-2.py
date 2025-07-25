@@ -43,7 +43,7 @@ def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendat
         if eng_nutrient_col and eng_nutrient_col in nutrition_df.columns:
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
-            top_foods['image_path'] = top_foods.index.to_series().apply(lambda x: get_single_image_path(x))
+            top_foods['image_path'] = top_foods.index.to_series().apply(lambda x: get_single_image_path(str(x)))
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
             result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
             recommendations[jp_nutrient] = result_df
@@ -67,6 +67,7 @@ def load_nutrition_data(path="master_natrition.csv"):
         df = pd.read_csv(path)
         for col in df.columns[4:]:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[\(\)-]', '0', regex=True), errors='coerce').fillna(0)
+        df['num'] = df['num'].astype(str)  # ← ここでstr型に変換
         df.set_index('num', inplace=True)
         return df
     except FileNotFoundError:
