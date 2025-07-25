@@ -20,28 +20,31 @@ IMAGE_BASE_PATH = "UECFOOD256"
 
 # --- 画像パス取得関数 ---
 def get_single_image_path(food_id):
-    """指定された食品IDフォルダ内の画像ファイルパスを返す（画像は1枚のみ前提）"""
+    """
+    指定された食品IDフォルダ内の画像ファイルパスを返す（画像は1枚のみ前提）
+    food_idはintでもstrでも良いが、strに統一
+    """
     folder = Path(IMAGE_BASE_PATH) / str(food_id)
     if not folder.is_dir():
         return None
     image_files = list(folder.glob("*.jpg")) + list(folder.glob("*.jpeg")) + list(folder.glob("*.png"))
     if image_files:
-        return str(image_files[0])
+        # 画像が見つかった場合は絶対パスで返す
+        return str(image_files[0].resolve())
     return None
 
+
 def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendations=5):
-    """不足している栄養素を補う料理を推薦する（画像パス付き）"""
     jp_to_eng_map = {v: k for k, v in nutrition_jp_map.items()}
     recommendations = {}
     sorted_deficiencies = sorted(deficiency_data.items(), key=lambda item: item[1]['不足分'], reverse=True)
-    
     for jp_nutrient, values in sorted_deficiencies[:3]:
         eng_nutrient_col = jp_to_eng_map.get(jp_nutrient)
         if eng_nutrient_col and eng_nutrient_col in nutrition_df.columns:
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
-            # 画像パス取得
-            top_foods['image_path'] = top_foods.index.to_series().apply(get_single_image_path)
+            # index（num）がint型の場合、str化して画像パス取得
+            top_foods['image_path'] = top_foods.index.to_series().apply(lambda x: get_single_image_path(x))
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
             result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
             recommendations[jp_nutrient] = result_df
@@ -147,11 +150,14 @@ else:
                     st.subheader("💡 不足分を補うおすすめメニュー")
                     st.write("特に不足している栄養素を補うには、以下のような料理がおすすめです。")
                     
+                    # Streamlitで表示
                     for nutrient, food_df in recommendations.items():
                         with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
                             for index, row in food_df.iterrows():
                                 col1, col2 = st.columns([1, 2])
                                 with col1:
+                                    # デバッグ: 画像パス表示
+                                    # st.write(row['image_path'])
                                     if row['image_path'] and os.path.exists(row['image_path']):
                                         st.image(row['image_path'])
                                     else:
