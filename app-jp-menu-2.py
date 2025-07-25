@@ -6,7 +6,6 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
-import random
 
 # --- 初期設定 ---
 
@@ -19,14 +18,13 @@ nutrition_jp_map = {
 
 IMAGE_BASE_PATH = "UECFOOD256"
 
-# --- ヘルパー関数 ---
-
-def find_image_path(food_id):
-    """food_idに対応する画像ファイルのパスを返す（最初の画像を優先表示）"""
-    food_dir = Path(IMAGE_BASE_PATH) / str(food_id)
-    if not food_dir.is_dir():
+# --- 画像パス取得関数 ---
+def get_single_image_path(food_id):
+    """指定された食品IDフォルダ内の画像ファイルパスを返す（画像は1枚のみ前提）"""
+    folder = Path(IMAGE_BASE_PATH) / str(food_id)
+    if not folder.is_dir():
         return None
-    image_files = list(food_dir.glob("*.jpg")) + list(food_dir.glob("*.jpeg")) + list(food_dir.glob("*.png"))
+    image_files = list(folder.glob("*.jpg")) + list(folder.glob("*.jpeg")) + list(folder.glob("*.png"))
     if image_files:
         return str(image_files[0])
     return None
@@ -39,18 +37,14 @@ def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendat
     
     for jp_nutrient, values in sorted_deficiencies[:3]:
         eng_nutrient_col = jp_to_eng_map.get(jp_nutrient)
-        
         if eng_nutrient_col and eng_nutrient_col in nutrition_df.columns:
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
-            
-            # 食品ID (index) から画像パスを取得
-            top_foods['image_path'] = top_foods.index.to_series().apply(find_image_path)
-            
+            # 画像パス取得
+            top_foods['image_path'] = top_foods.index.to_series().apply(get_single_image_path)
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
             result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
             recommendations[jp_nutrient] = result_df
-            
     return recommendations
 
 # --- データとモデルの読み込み ---
@@ -159,7 +153,7 @@ else:
                                 col1, col2 = st.columns([1, 2])
                                 with col1:
                                     if row['image_path'] and os.path.exists(row['image_path']):
-                                        st.image(row['image_path'], caption=row['料理名'])
+                                        st.image(row['image_path'])
                                     else:
                                         st.text("画像なし")
                                 with col2:
