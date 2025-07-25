@@ -18,12 +18,9 @@ nutrition_jp_map = {
     'fiber_g': '食物繊維 (g)', 'sodium_mg': 'ナトリウム (mg)'
 }
 
-# ★★★ここからパス設定を修正★★★
-# 実行中のスクリプトのディレクトリを取得
+# パス設定
 SCRIPT_DIR = Path(__file__).resolve().parent
-# スクリプトの場所を基準に画像フォルダへのパスを作成
 IMAGE_BASE_PATH = SCRIPT_DIR / "UECFOOD256"
-# ★★★ここまで★★★
 
 
 # --- ヘルパー関数 ---
@@ -42,135 +39,101 @@ def find_random_image(directory):
     if not image_files:
         return None
         
-    # Pathオブジェクトを文字列に変換して返す
     return str(random.choice(image_files))
 
+def detect_and_sum_nutrition(image, model, nutrition_df, master_df):
+    results = model(image)
+    detected_classes = results[0].boxes.cls.cpu().numpy().astype(int)
+    
+    if len(detected_classes) == 0:
+        return pd.DataFrame(), set()
+
+    detected_ids = set()
+    for class_id in detected_classes:
+        food_name = master_df.loc[master_df['class_id'] == class_id, 'food_name'].values
+        if len(food_name) > 0:
+            # nutrition_dfの'料理名'列と照合
+            matched_id = nutrition_df.loc[nutrition_df['料理名'] == food_name[0], 'num'].values
+            if len(matched_id) > 0:
+                detected_ids.add(matched_id[0])
+
+    if not detected_ids:
+        return pd.DataFrame(), set()
+
+    total_nutrition = nutrition_df[nutrition_df['num'].isin(detected_ids)].iloc[:, 4:-3].sum()
+    return total_nutrition.to_frame('Total'), detected_ids
+
+def recommend_foods(deficiency_data, nutrition_df, excluded_ids):
+    recommendations = {}
+    top_deficiencies = deficiency_data.head(3).index
+
+    # 検出された料理を除外
+    available_foods = nutrition_df[~nutrition_df['num'].isin(excluded_ids)].copy()
+
+    for nutrient in top_deficiencies:
+        nutrient_jp = nutrition_jp_map.get(nutrient, nutrient)
+        
+        # 欠損値を含む行をドロップ
+        recommended_df = available_foods.dropna(subset=[nutrient]).nlargest(5, nutrient)
+        
+        # おすすめ料理に画像パスを追加
+        recommended_df['image_path'] = recommended_df['num'].apply(
+            lambda x: find_random_image(IMAGE_BASE_PATH / str(x))
+        )
+        recommendations[nutrient_jp] = recommended_df
+    
+    return recommendations
+
+
+# --- Streamlit アプリケーション ---
+
+st.title("栄養管理アプリ")
+
+# データの読み込み
+model = YOLO("best-2.pt")
+master_df = pd.read_csv("master_natrition.csv")
 
 # 栄養素データの読み込み
 nutrition_df = pd.read_csv("master_natrition.csv")
-# 'food_name'列を'料理名'にリネームして、後の処理でエラーが出ないようにする
+# ★★★ ここが修正点です ★★★
+# 'food_name'列を'料理名'にリネームして、エラーを防ぎます
 nutrition_df = nutrition_df.rename(columns={'food_name': '料理名'})
 
-def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendations=5):
-    """不足している栄養素を補う料理を推薦する（画像パス付き）"""
-    jp_to_eng_map = {v: k for k, v in nutrition_jp_map.items()}
-    recommendations = {}
-    sorted_deficiencies = sorted(deficiency_data.items(), key=lambda item: item[1]['不足分'], reverse=True)
-    
-    for jp_nutrient, values in sorted_deficiencies[:3]:
-        eng_nutrient_col = jp_to_eng_map.get(jp_nutrient)
-        
-        if eng_nutrient_col and eng_nutrient_col in nutrition_df.columns:
-            recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
-            top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
-            
-            # ★変更点: 絶対パスのIMAGE_BASE_PATHを使用
-            top_foods['image_path'] = top_foods.index.to_series().apply(
-                lambda food_id: find_random_image(IMAGE_BASE_PATH / str(food_id))
-            )
-            
-            result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
-            result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
-            recommendations[jp_nutrient] = result_df
-            
-    return recommendations
 
-# --- データとモデルの読み込み ---
+uploaded_file = st.file_uploader("食事の写真をアップロードしてください", type=["jpg", "jpeg", "png"])
 
-@st.cache_resource
-def load_yolo_model(path="best-2.pt"):
-    """YOLOモデルをロード（キャッシュで高速化）"""
-    try:
-        # ★変更点: SCRIPT_DIRを基準にモデルパスを指定
-        model = YOLO(SCRIPT_DIR / path)
-        return model
-    except Exception as e:
-        st.error(f"モデル '{path}' の読み込みに失敗しました: {e}")
-        return None
-
-@st.cache_data
-def load_nutrition_data(path="master_natrition.csv"):
-    """栄養素データベースをロード（キャッシュで高速化）"""
-    try:
-        # ★変更点: SCRIPT_DIRを基準にCSVパスを指定
-        df = pd.read_csv(SCRIPT_DIR / path)
-        for col in df.columns[4:]:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[\(\)-]', '0', regex=True), errors='coerce').fillna(0)
-        df.set_index('num', inplace=True)
-        return df
-    except FileNotFoundError:
-        st.error(f"栄養素データベース '{path}' が見つかりません。")
-        return None
-    except Exception as e:
-        st.error(f"CSVファイルの読み込み中にエラーが発生しました: {e}")
-        return None
-
-model = load_yolo_model()
-nutrition_df = load_nutrition_data()
-
-# 1日の推奨摂取量
-daily_needs = {
-    'energy_kcal': 2650, 'protein_g': 65, 'fat_g': 73.6, 'carbohydrate_g': 378.1,
-    'calcium_mg': 800, 'iron_mg': 7.5, 'vitamin_c_mg': 100, 'vitamin_b1_mg': 1.4,
-    'vitamin_b2_mg': 1.6, 'fiber_g': 21, 'sodium_mg': 2362
+# 目標値の設定
+target_nutrition = {
+    'energy_kcal': 2200, 'protein_g': 65, 'fat_g': 55,
+    'carbohydrate_g': 330, 'calcium_mg': 800, 'iron_mg': 10.5,
+    'vitamin_c_mg': 100, 'vitamin_b1_mg': 1.4, 'vitamin_b2_mg': 1.6,
+    'fiber_g': 21, 'sodium_mg': 2800 
 }
+df_target = pd.DataFrame.from_dict(target_nutrition, orient='index', columns=['Target'])
 
-# --- Streamlit アプリケーション画面 ---
-st.title('🥗 食事分析AI')
-st.write('食事の写真をアップロードすると、含まれる栄養素を分析し、1日の摂取基準に足りない栄養素と、それを補うメニューをお知らせします。')
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="アップロードされた画像", use_column_width=True)
 
-if not IMAGE_BASE_PATH.is_dir():
-    st.error(f"画像フォルダ '{IMAGE_BASE_PATH.name}' が見つかりません。app.pyと同じ階層に配置してください。")
-else:
-    uploaded_file = st.file_uploader("画像をアップロードしてください", type=["jpg", "png", "jpeg"])
-
-    if uploaded_file is not None and model is not None and nutrition_df is not None:
-        image = Image.open(uploaded_file)
-        results = model(image) 
+    if st.button("診断"):
+        with st.spinner("栄養素を計算中..."):
+            img_array = np.array(image)
+            total_nutrition, detected_ids = detect_and_sum_nutrition(img_array, model, nutrition_df, master_df)
         
-        detected_items_jp, detected_ids = [], []
-        total_nutrition = pd.Series(0.0, index=nutrition_df.columns[3:]) 
-        img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
-        for result in results:
-            for box in result.boxes:
-                class_id = int(box.cls[0])
-                nutrition_id = class_id + 1 
-                detected_ids.append(nutrition_id)
-                
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                label = f'{result.names[class_id]}'
-                cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img_bgr, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-                if nutrition_id in nutrition_df.index:
-                    item_name_jp = nutrition_df.loc[nutrition_id, 'food_name']
-                    detected_items_jp.append(item_name_jp)
-                    total_nutrition += nutrition_df.loc[nutrition_id].iloc[3:]
-
-        st.subheader("📸 検出結果")
-        st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='検出された料理', use_column_width=True)
-        
-        if detected_items_jp:
-            st.write(f"検出された料理: **{', '.join(set(detected_items_jp))}**")
-            st.subheader("📊 この食事の栄養素")
-            display_nutrition = total_nutrition[daily_needs.keys()].copy()
-            display_nutrition.rename(index=nutrition_jp_map, inplace=True)
-            st.dataframe(display_nutrition.rename('摂取量').to_frame())
-
-            st.subheader("💪 1日の目標に対する不足栄養素")
-            deficiency_data = {}
-            for key, daily_value in daily_needs.items():
-                meal_value = total_nutrition.get(key, 0)
-                deficiency = daily_value - meal_value
-                if deficiency > 0:
-                    jp_key = nutrition_jp_map.get(key, key)
-                    deficiency_data[jp_key] = {
-                        "1日の目標": daily_value, "この食事の摂取量": meal_value, "不足分": deficiency
-                    }
+        if not total_nutrition.empty:
+            df_comparison = pd.concat([total_nutrition, df_target], axis=1).fillna(0)
+            df_comparison.index = df_comparison.index.map(nutrition_jp_map)
+            df_comparison.columns = ['摂取量', '目標値']
             
-            if deficiency_data:
-                df_deficiency = pd.DataFrame.from_dict(deficiency_data, orient='index')
+            st.subheader("摂取栄養素と目標値")
+            st.dataframe(df_comparison.style.format('{:.2f}'))
+            
+            deficiency_data = df_target['Target'] - total_nutrition['Total']
+            deficiency_data = deficiency_data[deficiency_data > 0].sort_values(ascending=False)
+            
+            if not deficiency_data.empty:
+                df_deficiency = deficiency_data.to_frame('不足分')
+                df_deficiency.index = df_deficiency.index.map(nutrition_jp_map)
                 st.warning("以下の栄養素が不足しています。")
                 st.dataframe(df_deficiency.style.format('{:.2f}'))
 
@@ -185,17 +148,13 @@ else:
                             for index, row in food_df.iterrows():
                                 col1, col2 = st.columns([1, 2])
                                 with col1:
-                                    #【修正点③】文字列のパスをチェックして表示
-                                    image_path = row.get('image_path') # .get()で安全に取得
-                                    
-                                    # 文字列のパスが取得でき、かつそのファイルが存在する場合に画像を表示
+                                    image_path = row.get('image_path')
                                     if image_path and os.path.exists(image_path):
                                         st.image(image_path)
                                     else:
                                         st.text("画像なし")
                                 with col2:
-                                    # '料理名'列を正しく参照
-                                    st.write(f"**{row['料理名']}**") 
+                                    st.write(f"**{row['料理名']}**")
                                     st.write(f"{nutrient}: {row[nutrient]:.2f}")
                                 st.divider()
                 
