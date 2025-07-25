@@ -120,7 +120,7 @@ else:
                     total_nutrition += nutrition_df.loc[nutrition_id].iloc[3:]
 
         st.subheader("📸 検出結果")
-        st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='検出された料理', use_column_width=True)
+        st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='検出された料理', use_container_width=True)
         
         if detected_items_jp:
             st.write(f"検出された料理: **{', '.join(set(detected_items_jp))}**")
