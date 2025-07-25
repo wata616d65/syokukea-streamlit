@@ -20,17 +20,21 @@ nutrition_jp_map = {
 
 IMAGE_BASE_PATH = "UECFOOD256"
 
-# --- ヘルパー関数 --- (修正部分)
-def find_image(directory):
-    """指定されたディレクトリ内の最初の画像ファイルパスを返す"""
+# --- ヘルパー関数 ---
+
+def find_random_image(directory):
+    """指定されたディレクトリ内のランダムな画像ファイルパスを返す"""
     p = Path(directory)
     if not p.is_dir():
         return None
     
-    for file_type in ['*.jpg', '*.jpeg', '*.png']:
-        image_files = list(p.glob(file_type))
-        if image_files:
-            return str(image_files[0])
+    image_files = [
+        file_path for file_path in p.iterdir() 
+        if file_path.suffix.lower() in ['.jpg', '.jpeg', '.png']
+    ]
+    
+    if image_files:
+        return str(random.choice(image_files))
     
     return None
 
@@ -47,9 +51,9 @@ def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendat
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
             
-            # 画像パス取得 (修正)
             top_foods['image_path'] = top_foods.index.to_series().apply(
-                lambda food_id: find_image(Path(IMAGE_BASE_PATH) / str(food_id))
+                lambda food_id: find_random_image(Path(IMAGE_BASE_PATH) / str(food_id))
+            )
             
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
             result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
@@ -158,37 +162,23 @@ else:
                 recommendations = recommend_foods(deficiency_data, nutrition_df, set(detected_ids))
 
                 if recommendations:
-    st.subheader("💡 不足分を補うおすすめメニュー")
-    st.write("特に不足している栄養素を補うには、以下のような料理がおすすめです。")
-    
-    for nutrient, food_df in recommendations.items():
-        with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
-            # ★★★画像表示の修正★★★
-            for index, row in food_df.iterrows():
-                col1, col2 = st.columns([1, 2])
-                
-                # 画像表示処理
-                image_displayed = False
-                if row['image_path'] and os.path.exists(row['image_path']):
-                    try:
-                        # 画像をリサイズして表示
-                        image = Image.open(row['image_path'])
-                        image = image.resize((200, 200))
-                        col1.image(image)
-                        image_displayed = True
-                    except Exception as e:
-                        st.error(f"画像読み込みエラー: {e}")
-                
-                if not image_displayed:
-                    col1.error("画像なし")
-                
-                # 料理情報表示
-                with col2:
-                    st.subheader(row['料理名'])
-                    st.write(f"**{nutrient}**: {row[nutrient]:.2f}")
-                    st.write(f"ID: {row.name}")
-                
-                st.divider()
+                    st.subheader("💡 不足分を補うおすすめメニュー")
+                    st.write("特に不足している栄養素を補うには、以下のような料理がおすすめです。")
+                    
+                    for nutrient, food_df in recommendations.items():
+                        with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
+                            # ★★★ここが画像表示の重要な部分です★★★
+                            for index, row in food_df.iterrows():
+                                col1, col2 = st.columns([1, 2])
+                                with col1:
+                                    if row['image_path'] and os.path.exists(row['image_path']):
+                                        st.image(row['image_path'])
+                                    else:
+                                        st.text("画像なし")
+                                with col2:
+                                    st.write(f"**{row['料理名']}**")
+                                    st.write(f"{nutrient}: {row[nutrient]:.2f}")
+                                st.divider()
                 
             else:
                 st.success("素晴らしい！この食事で1日の主要な栄養素目標を達成できそうです。")
