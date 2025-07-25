@@ -86,7 +86,7 @@ def load_nutrition_data(path="master_natrition.csv"):
     """栄養素データベースをロード（キャッシュで高速化）"""
     try:
         # ★変更点: SCRIPT_DIRを基準にCSVパスを指定
-        df = pd.read_csv(SCRIPT_DIR / path, encoding='cp932')
+        df = pd.read_csv(SCRIPT_DIR / path)
         for col in df.columns[4:]:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[\(\)-]', '0', regex=True), errors='coerce').fillna(0)
         df.set_index('num', inplace=True)
