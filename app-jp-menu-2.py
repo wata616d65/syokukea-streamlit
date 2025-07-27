@@ -6,9 +6,11 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
+import random
 
 # --- 初期設定 ---
 
+# 栄養素名（英語→日本語）のマッピング辞書
 nutrition_jp_map = {
     'energy_kcal': 'エネルギー (kcal)', 'protein_g': 'タンパク質 (g)', 'fat_g': '脂質 (g)',
     'carbohydrate_g': '炭水化物 (g)', 'calcium_mg': 'カルシウム (mg)', 'iron_mg': '鉄 (mg)',
@@ -18,42 +20,52 @@ nutrition_jp_map = {
 
 IMAGE_BASE_PATH = "UECFOOD256"
 
-# --- 画像パス取得関数 ---
-def get_single_image_path(food_id):
-    """
-    指定された食品IDフォルダ内の画像ファイルパスを返す（画像は1枚のみ前提）
-    food_idはintでもstrでも良いが、strに統一
-    """
-    folder = Path(IMAGE_BASE_PATH) / str(food_id)
-    if not folder.is_dir():
+# --- ヘルパー関数 ---
+
+def find_random_image(directory):
+    """指定されたディレクトリ内のランダムな画像ファイルパスを返す"""
+    p = Path(directory)
+    if not p.is_dir():
         return None
-    image_files = list(folder.glob("*.jpg")) + list(folder.glob("*.jpeg")) + list(folder.glob("*.png"))
+    
+    image_files = [
+        file_path for file_path in p.iterdir() 
+        if file_path.suffix.lower() in ['.jpg', '.jpeg', '.png']
+    ]
+    
     if image_files:
-        # 相対パスで返す
-        return str(image_files[0])
+        return str(random.choice(image_files))
+    
     return None
 
-
 def recommend_foods(deficiency_data, nutrition_df, detected_ids, num_recommendations=5):
+    """不足している栄養素を補う料理を推薦する（画像パス付き）"""
     jp_to_eng_map = {v: k for k, v in nutrition_jp_map.items()}
     recommendations = {}
     sorted_deficiencies = sorted(deficiency_data.items(), key=lambda item: item[1]['不足分'], reverse=True)
+    
     for jp_nutrient, values in sorted_deficiencies[:3]:
         eng_nutrient_col = jp_to_eng_map.get(jp_nutrient)
+        
         if eng_nutrient_col and eng_nutrient_col in nutrition_df.columns:
             recommend_df = nutrition_df[~nutrition_df.index.isin(detected_ids)]
             top_foods = recommend_df.sort_values(by=eng_nutrient_col, ascending=False).head(num_recommendations)
-            top_foods['image_path'] = top_foods.index.to_series().apply(lambda x: get_single_image_path(str(x)))
+            
+            top_foods['image_path'] = top_foods.index.to_series().apply(
+                lambda food_id: find_random_image(Path(IMAGE_BASE_PATH) / str(food_id))
+            )
+            
             result_df = top_foods[['food_name', eng_nutrient_col, 'image_path']].copy()
             result_df.rename(columns={'food_name': '料理名', eng_nutrient_col: jp_nutrient}, inplace=True)
             recommendations[jp_nutrient] = result_df
+            
     return recommendations
-
 
 # --- データとモデルの読み込み ---
 
 @st.cache_resource
 def load_yolo_model(path="best-2.pt"):
+    """YOLOモデルをロード（キャッシュで高速化）"""
     try:
         model = YOLO(path)
         return model
@@ -63,11 +75,11 @@ def load_yolo_model(path="best-2.pt"):
 
 @st.cache_data
 def load_nutrition_data(path="master_natrition.csv"):
+    """栄養素データベースをロード（キャッシュで高速化）"""
     try:
         df = pd.read_csv(path)
         for col in df.columns[4:]:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[\(\)-]', '0', regex=True), errors='coerce').fillna(0)
-        df['num'] = df['num'].astype(str)  # ← ここでstr型に変換
         df.set_index('num', inplace=True)
         return df
     except FileNotFoundError:
@@ -80,6 +92,7 @@ def load_nutrition_data(path="master_natrition.csv"):
 model = load_yolo_model()
 nutrition_df = load_nutrition_data()
 
+# 1日の推奨摂取量
 daily_needs = {
     'energy_kcal': 2650, 'protein_g': 65, 'fat_g': 73.6, 'carbohydrate_g': 378.1,
     'calcium_mg': 800, 'iron_mg': 7.5, 'vitamin_c_mg': 100, 'vitamin_b1_mg': 1.4,
@@ -90,6 +103,7 @@ daily_needs = {
 st.title('🥗 食事分析AI')
 st.write('食事の写真をアップロードすると、含まれる栄養素を分析し、1日の摂取基準に足りない栄養素と、それを補うメニューをお知らせします。')
 
+# ★★★画像フォルダの存在チェックを追加★★★
 if not os.path.isdir(IMAGE_BASE_PATH):
     st.error(f"画像フォルダ '{IMAGE_BASE_PATH}' が見つかりません。app.pyと同じ階層に配置してください。")
 else:
@@ -120,7 +134,7 @@ else:
                     total_nutrition += nutrition_df.loc[nutrition_id].iloc[3:]
 
         st.subheader("📸 検出結果")
-        st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='検出された料理', use_container_width=True)
+        st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='検出された料理', use_column_width=True)
         
         if detected_items_jp:
             st.write(f"検出された料理: **{', '.join(set(detected_items_jp))}**")
@@ -151,15 +165,13 @@ else:
                     st.subheader("💡 不足分を補うおすすめメニュー")
                     st.write("特に不足している栄養素を補うには、以下のような料理がおすすめです。")
                     
-                    # Streamlitで表示
                     for nutrient, food_df in recommendations.items():
                         with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
+                            # ★★★ここが画像表示の重要な部分です★★★
                             for index, row in food_df.iterrows():
                                 col1, col2 = st.columns([1, 2])
                                 with col1:
-                                    # デバッグ: 画像パス表示
-                                    st.write("画像パス:", row['image_path'])
-                                    if row['image_path']:
+                                    if row['image_path'] and os.path.exists(row['image_path']):
                                         st.image(row['image_path'])
                                     else:
                                         st.text("画像なし")
@@ -172,3 +184,4 @@ else:
                 st.success("素晴らしい！この食事で1日の主要な栄養素目標を達成できそうです。")
         else:
             st.info("写真から料理を検出できませんでした。別の画像を試してください。")
+
