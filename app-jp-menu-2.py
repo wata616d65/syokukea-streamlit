@@ -93,86 +93,126 @@ daily_needs = {
     'vitamin_b2_mg': 1.6, 'fiber_g': 21, 'sodium_mg': 2362
 }
 
+def analyze_meal(image, model, nutrition_df):
+    detected_items_jp, detected_ids = [], []
+    total_nutrition = pd.Series(0.0, index=nutrition_df.columns[3:])
+    img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    results = model(image)
+    for result in results:
+        for box in result.boxes:
+            class_id = int(box.cls[0])
+            nutrition_id = class_id + 1
+            detected_ids.append(nutrition_id)
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            label = f'{result.names[class_id]}'
+            cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(img_bgr, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            if nutrition_id in nutrition_df.index:
+                item_name_jp = nutrition_df.loc[nutrition_id, 'food_name']
+                detected_items_jp.append(item_name_jp)
+                total_nutrition += nutrition_df.loc[nutrition_id].iloc[3:]
+    return detected_items_jp, detected_ids, total_nutrition, img_bgr
+
+
+
 # --- Streamlit アプリ ---
-st.title('🥗 食事分析AI')
-st.write('食事の写真をアップロードすると、含まれる栄養素を分析し、1日の摂取基準に足りない栄養素と、それを補うメニューをお知らせします。')
+st.title('🥗 食事分析AI - 3食管理バージョン')
+st.write('3食分の写真をアップロードして、1日の栄養素摂取状況を可視化・管理できます。')
 
 if not os.path.isdir(IMAGE_BASE_PATH):
     st.error(f"画像フォルダ '{IMAGE_BASE_PATH}' が見つかりません。app.pyと同じ階層に配置してください。")
 else:
-    uploaded_file = st.file_uploader("画像をアップロードしてください", type=["jpg", "png", "jpeg"])
+    st.header("画像アップロード（3食分）")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        breakfast_img = st.file_uploader("朝食画像", type=["jpg", "png", "jpeg"], key="breakfast")
+    with col2:
+        lunch_img = st.file_uploader("昼食画像", type=["jpg", "png", "jpeg"], key="lunch")
+    with col3:
+        dinner_img = st.file_uploader("夕食画像", type=["jpg", "png", "jpeg"], key="dinner")
 
-    if uploaded_file is not None and model is not None and nutrition_df is not None:
-        image = Image.open(uploaded_file)
-        results = model(image) 
+    # 実行ボタン
+    if st.button("3食分の食事を分析する"):
+        meal_images = {
+            "朝食": breakfast_img,
+            "昼食": lunch_img,
+            "夕食": dinner_img
+        }
+        meal_results = {}
+        total_nutrition = pd.Series(0.0, index=nutrition_df.columns[3:])
+        all_detected_ids = set()
+        all_detected_items = []
 
-        detected_items_jp, detected_ids = [], []
-        total_nutrition = pd.Series(0.0, index=nutrition_df.columns[3:]) 
-        img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
-        for result in results:
-            for box in result.boxes:
-                class_id = int(box.cls[0])
-                nutrition_id = class_id + 1
-                detected_ids.append(nutrition_id)
-
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                label = f'{result.names[class_id]}'
-                cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img_bgr, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-                if nutrition_id in nutrition_df.index:
-                    item_name_jp = nutrition_df.loc[nutrition_id, 'food_name']
-                    detected_items_jp.append(item_name_jp)
-                    total_nutrition += nutrition_df.loc[nutrition_id].iloc[3:]
-
-        st.subheader("📸 検出結果")
-        st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption='検出された料理', use_column_width=True)
-
-        if detected_items_jp:
-            st.write(f"検出された料理: **{', '.join(set(detected_items_jp))}**")
-            st.subheader("📊 この食事の栄養素")
-            display_nutrition = total_nutrition[daily_needs.keys()].copy()
-            display_nutrition.rename(index=nutrition_jp_map, inplace=True)
-            st.dataframe(display_nutrition.rename('摂取量').to_frame())
-
-            st.subheader("💪 1日の目標に対する不足栄養素")
-            deficiency_data = {}
-            for key, daily_value in daily_needs.items():
-                meal_value = total_nutrition.get(key, 0)
-                deficiency = daily_value - meal_value
-                if deficiency > 0:
-                    jp_key = nutrition_jp_map.get(key, key)
-                    deficiency_data[jp_key] = {
-                        "1日の目標": daily_value, "この食事の摂取量": meal_value, "不足分": deficiency
-                    }
-
-            if deficiency_data:
-                df_deficiency = pd.DataFrame.from_dict(deficiency_data, orient='index')
-                st.warning("以下の栄養素が不足しています。")
-                st.dataframe(df_deficiency.style.format('{:.2f}'))
-
-                recommendations = recommend_foods(deficiency_data, nutrition_df, set(detected_ids))
-
-                if recommendations:
-                    st.subheader("💡 不足分を補うおすすめメニュー")
-                    st.write("特に不足している栄養素を補うには、以下のような料理がおすすめです。")
-
-                    for nutrient, food_df in recommendations.items():
-                        with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
-                            for index, row in food_df.iterrows():
-                                col1, col2 = st.columns([1, 2])
-                                with col1:
-                                    if row['image_path'] and os.path.exists(row['image_path']):
-                                        st.image(row['image_path'])
-                                    else:
-                                        st.text("画像なし")
-                                with col2:
-                                    st.write(f"**{row['料理名']}**")
-                                    st.write(f"{nutrient}: {row[nutrient]:.2f}")
-                                st.divider()
-
+        for meal_name, img_file in meal_images.items():
+            if img_file is not None:
+                image = Image.open(img_file)
+                detected_items_jp, detected_ids, meal_nutrition, img_bgr = analyze_meal(image, model, nutrition_df)
+                meal_results[meal_name] = {
+                    "detected_items_jp": detected_items_jp,
+                    "detected_ids": detected_ids,
+                    "meal_nutrition": meal_nutrition,
+                    "img_bgr": img_bgr
+                }
+                total_nutrition += meal_nutrition
+                all_detected_ids.update(detected_ids)
+                all_detected_items.extend(detected_items_jp)
             else:
-                st.success("素晴らしい！この食事で1日の主要な栄養素目標を達成できそうです。")
+                meal_results[meal_name] = None
+
+        # --- 結果表示 ---
+        st.header("3食の検出結果")
+        for meal_name, result in meal_results.items():
+            st.subheader(f"{meal_name}")
+            if result is not None:
+                st.image(cv2.cvtColor(result["img_bgr"], cv2.COLOR_BGR2RGB), caption=f'{meal_name}の検出', use_column_width=True)
+                if result["detected_items_jp"]:
+                    st.write(f"検出料理: **{', '.join(set(result['detected_items_jp']))}**")
+                    disp = result["meal_nutrition"][daily_needs.keys()].copy()
+                    disp.rename(index=nutrition_jp_map, inplace=True)
+                    st.dataframe(disp.rename('摂取量').to_frame())
+                else:
+                    st.info("料理を検出できませんでした。")
+            else:
+                st.info("画像が未入力です。")
+
+        # --- 合計・不足表示 ---
+        st.header("1日合計の栄養素摂取量")
+        disp_total = total_nutrition[daily_needs.keys()].copy()
+        disp_total.rename(index=nutrition_jp_map, inplace=True)
+        st.dataframe(disp_total.rename('摂取量').to_frame())
+
+        st.header("1日の目標に対する不足栄養素")
+        deficiency_data = {}
+        for key, daily_value in daily_needs.items():
+            meal_value = total_nutrition.get(key, 0)
+            deficiency = daily_value - meal_value
+            if deficiency > 0:
+                jp_key = nutrition_jp_map.get(key, key)
+                deficiency_data[jp_key] = {
+                    "1日の目標": daily_value,
+                    "摂取量合計": meal_value,
+                    "不足分": deficiency
+                }
+
+        if deficiency_data:
+            df_deficiency = pd.DataFrame.from_dict(deficiency_data, orient='index')
+            st.warning("以下の栄養素が不足しています。")
+            st.dataframe(df_deficiency.style.format('{:.2f}'))
+            recommendations = recommend_foods(deficiency_data, nutrition_df, all_detected_ids)
+            if recommendations:
+                st.subheader("💡 不足分を補うおすすめメニュー")
+                for nutrient, food_df in recommendations.items():
+                    with st.expander(f"**「{nutrient}」**が豊富な料理TOP5"):
+                        for index, row in food_df.iterrows():
+                            col1, col2 = st.columns([1, 2])
+                            with col1:
+                                if row['image_path'] and os.path.exists(row['image_path']):
+                                    st.image(row['image_path'])
+                                else:
+                                    st.text("画像なし")
+                            with col2:
+                                st.write(f"**{row['料理名']}**")
+                                st.write(f"{nutrient}: {row[nutrient]:.2f}")
+                            st.divider()
         else:
-            st.info("写真から料理を検出できませんでした。別の画像を試してください。")
+            st.success("素晴らしい！今日の3食で1日の主要な栄養素目標を達成できそうです。")
